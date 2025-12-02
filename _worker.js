@@ -729,7 +729,7 @@ async function handleOAuthAuthorize(request, env) {
             state: state
         });
         
-        const authUrl = `${env.OAUTH_BASE_URL}/oauth2/authorize?${params}`;
+        const authUrl = `${env.OAUTH_BASE_URL}/oauth/authorize?${params}`;
         
         return new Response(null, {
             status: 302,
@@ -882,7 +882,7 @@ async function processOAuthCode(code, state, clientIP, request, env, corsHeaders
         }
         
         // 获取访问令牌
-        const tokenResponse = await fetch(`${env.OAUTH_BASE_URL}/oauth2/token`, {
+        const tokenResponse = await fetch(`${env.OAUTH_BASE_URL}/oauth/token`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
