@@ -1,4 +1,7 @@
 // 完整2FA管理系统 - OAuth授权登录版本（支持2FAuth v5.5.2格式 ）
+// [Patch v2] 现在直接使用 Cloudflare Access 保护本 Worker，
+//             /api/oauth/authorize 直接读取 CF Access JWT 签发 2fauth 会话，
+//             不再需要外部 OAuth 适配器。
 const BASE32_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
 // ===== 安全配置 =====
@@ -630,6 +633,7 @@ async function getAuthenticatedUser(request, env) {
 }
 
 // ===== OAuth相关函数 =====
+// [Patch v2] fetchOAuthUser 不再被使用，保留函数签名以兼容
 async function fetchOAuthUser(accessToken, oauthBaseUrl) {
     try {
         const response = await fetch(`${oauthBaseUrl}/api/user`, {
@@ -715,32 +719,114 @@ function getCorsHeaders(request, env) {
 }
 
 // ===== OAuth授权URL构建 =====
+// [Patch v2] Cloudflare Access direct mode:
+//   - CF Access 已经保护本 Worker 整个域名
+//   - 用户点击"第三方授权登录"时，本函数直接读取请求头中的
+//     `Cf-Access-Jwt-Assertion`，解码出 email，校验白名单，
+//     签发 2fauth 自己的 JWT，写入 localStorage 并跳转 `/`
+//   - 不再走外部 OAuth 适配器
+function decodeCfAccessJwt(jwt) {
+    try {
+        if (!jwt || typeof jwt !== 'string') return null;
+        const parts = jwt.split('.');
+        if (parts.length !== 3) return null;
+        const payloadB64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        const padded = payloadB64 + '==='.slice((payloadB64.length + 3) % 4);
+        const json = atob(padded);
+        return JSON.parse(json);
+    } catch (e) {
+        return null;
+    }
+}
+
 async function handleOAuthAuthorize(request, env) {
     if (request.method !== 'GET') {
         return new Response('Method not allowed', { status: 405 });
     }
-    
+
+    const corsHeaders = getCorsHeaders(request, env);
+    const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
+
     try {
-        const state = crypto.randomUUID();
-        const params = new URLSearchParams({
-            response_type: 'code',
-            client_id: env.OAUTH_CLIENT_ID,
-            redirect_uri: env.OAUTH_REDIRECT_URI,
-            state: state
-        });
-        
-        const authUrl = `${env.OAUTH_BASE_URL}/oauth2/authorize?${params}`;
-        
-        return new Response(null, {
-            status: 302,
-            headers: {
-                'Location': authUrl,
-                'Set-Cookie': `oauth_state=${state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`
-            }
+        // 1. 读取 CF Access JWT（Access 在前面已经做过 OTP 验证）
+        const accessJwt = request.headers.get('Cf-Access-Jwt-Assertion');
+        if (!accessJwt) {
+            return new Response(JSON.stringify({
+                error: 'CF Access JWT missing. Please ensure Cloudflare Access is configured for this domain.'
+            }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+
+        const payload = decodeCfAccessJwt(accessJwt);
+        if (!payload || !payload.email) {
+            return new Response(JSON.stringify({ error: 'Invalid CF Access JWT' }), {
+                status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            });
+        }
+
+        // 2. 校验过期时间
+        const now = Math.floor(Date.now() / 1000);
+        if (payload.exp && payload.exp < now) {
+            return new Response(JSON.stringify({ error: 'CF Access session expired, please re-login.' }), {
+                status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            });
+        }
+
+        // 3. 校验邮箱白名单（双重防护：Access 已经做了，这里再做一次）
+        const allowedEmails = (env.ALLOWED_EMAILS || '')
+            .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+        const email = (payload.email || '').toLowerCase();
+        if (allowedEmails.length > 0 && !allowedEmails.includes(email)) {
+            await logSecurityEvent('OAUTH_UNAUTHORIZED', { email }, request);
+            return new Response(JSON.stringify({
+                error: `Email ${email} is not allowed.`
+            }), { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+
+        // 4. 构造用户信息（统一 id，所有允许的邮箱共享一份数据）
+        const userId = env.OAUTH_ID || '2fauth-user';
+        const userInfo = {
+            id: userId,
+            username: email.split('@')[0],
+            nickname: email.split('@')[0],
+            email: email,
+            avatar_template: ''
+        };
+
+        // 5. 签发 2fauth 自己的 JWT
+        const jwtPayload = {
+            userInfo,
+            ip: clientIP,
+            loginMethod: 'cfaccess',
+            iat: now,
+            exp: now + SECURITY_CONFIG.JWT_EXPIRY
+        };
+        const token = await generateSecureJWT(jwtPayload, env.JWT_SECRET);
+
+        await logSecurityEvent('OAUTH_SUCCESS', { userId, email }, request);
+
+        // 6. 返回一个 HTML 页面：写 localStorage 后跳转 /
+        //    保持与原 OAuth callback 页面一致的接口，让前端继续工作
+        const html = `<!DOCTYPE html>
+<html><head><title>登录中</title><meta charset="UTF-8">
+<style>body{font-family:Arial,sans-serif;text-align:center;padding:50px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;min-height:100vh;margin:0;display:flex;flex-direction:column;justify-content:center;align-items:center}.container{background:rgba(255,255,255,0.95);color:#333;padding:2rem;border-radius:16px;box-shadow:0 20px 40px rgba(0,0,0,0.1);max-width:400px;width:100%}.loading{margin:20px 0;font-size:1.1rem}.spinner{width:40px;height:40px;border:4px solid #f3f3f3;border-top:4px solid #667eea;border-radius:50%;animation:spin 1s linear infinite;margin:20px auto}@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}</style>
+</head><body><div class="container"><h1>🔐 Cloudflare Access 验证通过</h1><div class="spinner"></div><div class="loading">正在登录...</div></div>
+<script>
+try {
+  localStorage.setItem('authToken', ${JSON.stringify(token)});
+  localStorage.setItem('userInfo', ${JSON.stringify(JSON.stringify(userInfo))});
+  localStorage.setItem('loginTime', Date.now().toString());
+} catch (e) { console.error(e); }
+setTimeout(() => { window.location.href = '/'; }, 600);
+</script>
+</body></html>`;
+
+        return new Response(html, {
+            status: 200,
+            headers: { 'Content-Type': 'text/html; charset=utf-8' }
         });
     } catch (error) {
         console.error('OAuth authorize error:', error);
-        return new Response(`OAuth configuration error: ${error.message}`, { status: 500 });
+        return new Response(`Login configuration error: ${error.message}`, { status: 500 });
     }
 }
 
@@ -887,7 +973,8 @@ async function processOAuthCode(code, state, clientIP, request, env, corsHeaders
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'Accept': 'application/json',
-                'User-Agent': '2FA-Manager/1.0'
+                'User-Agent': '2FA-Manager/1.0',
+                ...cfAccessHeaders(env)
             },
             body: new URLSearchParams({
                 grant_type: 'authorization_code',
@@ -909,7 +996,7 @@ async function processOAuthCode(code, state, clientIP, request, env, corsHeaders
         }
         
         // 获取用户信息
-        const userData = await fetchOAuthUser(tokenData.access_token, env.OAUTH_BASE_URL);
+        const userData = await fetchOAuthUser(tokenData.access_token, env.OAUTH_BASE_URL, env);
         
         // 验证用户ID
         if (!userData.id || userData.id.toString() !== env.OAUTH_ID) {
@@ -2342,22 +2429,22 @@ header h1 {
                     <h2>🔐 安全登录</h2>
                     <p style="color: #6b7280; margin: 1rem 0;">使用第三方授权登录系统</p>
                     
-		<button onclick="startOAuthLogin()" class="oauth-login-btn">
-		    <span class="oauth-icon">
-		        <img src="https://linux.do/logo-256.svg" 
-		             alt="Logo" 
-		             style="width: 40px; height: 40px; object-fit: contain;">
-		    </span>
-		    <span>使用Linux.do账号登录</span>
-		</button>
-		
-		<!-- GitHub 开源仓库链接 -->
-		<div class="github-link">
-		    <a href="https://github.com/ilikeeu/2fauth" target="_blank" rel="noopener noreferrer">
-		        <i class="fab fa-github"></i>
-		        2fauth - 现代化双因素认证(2FA)管理系统
-		    </a>
-		</div>
+                <button onclick="startOAuthLogin()" class="oauth-login-btn">
+                    <span class="oauth-icon">
+                        <img src="https://linux.do/logo-256.svg" 
+                             alt="Logo" 
+                             style="width: 40px; height: 40px; object-fit: contain;">
+                    </span>
+                    <span>使用Linux.do账号登录</span>
+                </button>
+                
+                <!-- GitHub 开源仓库链接 -->
+                <div class="github-link">
+                    <a href="https://github.com/ilikeeu/2fauth" target="_blank" rel="noopener noreferrer">
+                        <i class="fab fa-github"></i>
+                        2fauth - 现代化双因素认证(2FA)管理系统
+                    </a>
+                </div>
 
 
                     
@@ -5844,7 +5931,7 @@ export default {
                         'X-Content-Type-Options': 'nosniff',
                         'X-Frame-Options': 'DENY',
                         'Referrer-Policy': 'strict-origin-when-cross-origin',
-			'Content-Security-Policy': "default-src 'self' data:; script-src 'self' 'unsafe-inline' https://jsdelivr.b-cdn.net; style-src 'self' 'unsafe-inline' data: https://jsdelivr.b-cdn.net; font-src 'self' data: https://jsdelivr.b-cdn.net; img-src 'self' data: https:; connect-src 'self';"
+                        'Content-Security-Policy': "default-src 'self' data:; script-src 'self' 'unsafe-inline' https://jsdelivr.b-cdn.net; style-src 'self' 'unsafe-inline' data: https://jsdelivr.b-cdn.net; font-src 'self' data: https://jsdelivr.b-cdn.net; img-src 'self' data: https:; connect-src 'self';"
                     }
                 });
             }
