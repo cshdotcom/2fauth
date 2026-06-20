@@ -1,360 +1,371 @@
------
+# 🔐 2FA 安全管理系统
 
-# 🔐 2FA 安全管理系统 
+一个基于 Cloudflare Workers 的现代化双因素认证 (2FA) 管理系统，支持两种登录模式：
 
-一个基于 Cloudflare Workers 的现代化双因素认证(2FA)管理系统，提供安全的 TOTP 代码生成、账户管理和云端备份功能。
+- **模式 A — Cloudflare Access 邮箱 OTP**（推荐，零外部依赖）
+- **模式 B — LinuxDO OAuth 标准授权**（原始方式，需 LinuxDO 账号）
 
------
+---
 
 ## ✨ 特性
 
-### 🛡️ 安全特性
-
-  * **OAuth 2.0 授权登录** - 支持第三方 OAuth 服务安全认证
-  * **端到端加密** - 所有敏感数据使用 AES-GCM 加密存储
-  * **JWT 会话管理** - 2小时自动过期的安全会话
-  * **速率限制保护** - 防止暴力攻击和 API 滥用
-  * **安全审计日志** - 记录所有重要操作和安全事件
+### 🛡️ 安全
+- **登录模式 A**：Cloudflare Access 邮箱 OTP 全域保护 + Worker 内 email 白名单双重防护
+- **登录模式 B**：标准 OAuth 2.0 授权登录（LinuxDO 等）
+- **端到端加密**：所有敏感数据使用 AES-GCM 加密存储
+- **JWT 会话管理**：2 小时自动过期
+- **速率限制 + 安全审计日志**
 
 ### 📱 2FA 管理
-
-  * **多种添加方式** - 手动输入、二维码扫描、图片上传
-  * **TOTP 代码生成** - 支持 6/8 位验证码，30/60 秒周期
-  * **智能账户分类** - 自定义分类标签和快速搜索
-  * **实时代码显示** - 带进度条的验证码倒计时
-  * **一键复制功能** - 自动复制验证码到剪贴板
+- 多种添加方式（手动输入 / 扫码 / 上传图片 / 批量导入）
+- TOTP 6/8 位验证码，30/60 秒周期
+- 智能账户分类 + 实时倒计时 + 一键复制
 
 ### ☁️ 云端备份
-
-  * **WebDAV 自动备份** - 支持 Nextcloud、ownCloud、TeraCloud 等
-  * **多账号管理** - 可配置多个 WebDAV 存储账号
-  * **加密备份文件** - 密码保护的备份文件
-  * **智能目录结构** - 按年/月/日自动组织备份文件
-  * **备份历史管理** - 查看、下载、恢复历史备份
+- WebDAV 自动备份（Nextcloud / ownCloud / TeraCloud）
+- 加密备份文件 + 按日期自动组织 + 历史管理
 
 ### 📥📤 数据迁移
+- 支持 JSON / 2FAS / 纯文本格式
+- 加密导出 + 批量去重
 
-  * **多格式导入** - 支持 JSON、2FAS、纯文本格式
-  * **加密导出** - 密码保护的安全导出
-  * **批量操作** - 支持批量导入和去重处理
-  * **数据验证** - 严格的数据格式验证和清理
+---
 
------
+## 📋 部署前置条件
 
-## 🚀 快速开始
+| 项 | 必需 | 说明 |
+| --- | --- | --- |
+| Cloudflare 账号 | ✅ | 免费版即可 |
+| 一个域名（已托管在 Cloudflare） | ✅ | 用于自定义域名绑定，例如 `2fa.yourdomain.com` |
+| Node.js ≥ 18 + npm | ✅ | 用于安装 Wrangler CLI |
+| GitHub 账号 | 可选 | 用于 fork 本仓库 |
+| LinuxDO 账号 | 仅模式 B | 用于创建 OAuth 应用 |
 
-### 环境要求
+---
 
-  * Cloudflare Workers 账号
-  * Wrangler CLI 工具
-  * OAuth 2.0 认证服务器（如 GitHub、GitLab、自建等）
+## 🚀 部署步骤
 
-### 部署步骤
+### 步骤 1：克隆仓库
 
-1.  **克隆仓库**
-
-    ```bash
-    git clone https://github.com/ilikeeu/2fauth.git
-    cd 2fauth
-    ```
-
-2.  **安装依赖**
-
-    ```bash
-    npm install -g wrangler
-    ```
-
-3.  **创建 KV 命名空间**
-
-    ```bash
-    wrangler kv:namespace create "USER_DATA"
-    wrangler kv:namespace create "USER_DATA" --preview
-    ```
-
-4.  **配置 `wrangler.toml`**
-
-    ```toml
-    name = "2fa-secure-manager"
-    main = "src/index.js"
-    compatibility_date = "2024-01-15"
-
-    [[kv_namespaces]]
-    binding = "USER_DATA"
-    id = "your-kv-namespace-id"
-    preview_id = "your-preview-kv-namespace-id"
-
-    [vars]
-    OAUTH_BASE_URL = "https://your-oauth-server.com"
-    OAUTH_REDIRECT_URI = "https://your-domain.workers.dev/api/oauth/callback"
-    OAUTH_ID = "authorized_user_id"
-
-    [env.production.vars]
-    ALLOWED_ORIGINS = "https://your-domain.workers.dev"
-    ```
-
-5.  **设置环境变量**
-
-    ```bash
-    # OAuth 配置
-    wrangler secret put OAUTH_CLIENT_ID
-    wrangler secret put OAUTH_CLIENT_SECRET
-
-    # 安全密钥
-    wrangler secret put JWT_SECRET
-    wrangler secret put ENCRYPTION_KEY
-    ```
-
-6.  **部署到 Cloudflare Workers**
-
-    ```bash
-    wrangler deploy
-    ```
-
------
-
-## ⚙️ 配置说明
-
-### 必需的环境变量
-
-| 变量名             | 描述           | 示例                           |
-| :----------------- | :------------- | :----------------------------- |
-| `OAUTH_CLIENT_ID`  | OAuth 客户端 ID | `your_oauth_client_id`         |
-| `OAUTH_CLIENT_SECRET` | OAuth 客户端密钥 | `your_oauth_client_secret`     |
-| `OAUTH_BASE_URL`   | OAuth 服务器地址 | `https://oauth.example.com`    |
-| `OAUTH_REDIRECT_URI` | OAuth 回调地址 | `https://your-app.workers.dev/api/oauth/callback` |
-| `OAUTH_ID`         | 授权用户 ID    | `12345`                        |
-| `JWT_SECRET`       | JWT 签名密钥   | `your_strong_jwt_secret`       |
-| `ENCRYPTION_KEY`   | 数据加密密钥   | `your_encryption_key`          |
-
-### 可选的环境变量
-
-| 变量名           | 描述         | 默认值 |
-| :--------------- | :----------- | :----- |
-| `ALLOWED_ORIGINS` | 允许的跨域来源 | `*`    |
-
-### OAuth 服务器配置
-
-系统支持任何标准的 OAuth 2.0 服务器。以下是一些常见的配置示例：
-
-#### GitHub OAuth App
-
-```
-OAUTH_BASE_URL=https://github.com
-OAUTH_CLIENT_ID=your_github_client_id
-OAUTH_CLIENT_SECRET=your_github_client_secret
-OAUTH_REDIRECT_URI=https://your-app.workers.dev/api/oauth/callback
-OAUTH_ID=your_github_user_id
+```bash
+git clone https://github.com/cshdotcom/2fauth.git
+cd 2fauth
 ```
 
-#### 自建 OAuth 服务器
+### 步骤 2：安装 Wrangler
 
-```
-OAUTH_BASE_URL=https://your-oauth-server.com
-OAUTH_CLIENT_ID=your_client_id
-OAUTH_CLIENT_SECRET=your_client_secret
-OAUTH_REDIRECT_URI=https://your-app.workers.dev/api/oauth/callback
-OAUTH_ID=your_user_id
+```bash
+npm install -g wrangler
+wrangler --version  # 应显示 ≥ 3.0
 ```
 
------
+### 步骤 3：登录 Cloudflare
 
-## 📖 使用指南
-
-### 基本操作
-
-1.  **登录系统**
-
-      * 点击"第三方授权登录"按钮
-      * 在 OAuth 服务器完成授权
-      * 自动跳转回系统主界面
-
-2.  **添加 2FA 账户**
-
-      * **手动添加**：输入服务名称、账户信息和 Base32 密钥
-      * **扫描二维码**：使用摄像头扫描或上传二维码图片
-      * **批量导入**：从其他 2FA 应用导入数据
-
-3.  **生成验证码**
-
-      * 点击账户卡片查看验证码
-      * 验证码自动复制到剪贴板
-      * 实时显示剩余有效时间
-
-### WebDAV 备份配置
-
-1.  **添加 WebDAV 账号**
-
-      * 输入 WebDAV 服务器地址
-      * 配置用户名和密码
-      * 设置备份目录路径
-
-2.  **自动备份**
-
-      * 点击"立即备份"创建加密备份
-      * 备份文件按日期自动组织
-      * 支持多个 WebDAV 账号管理
-
-3.  **恢复备份**
-
-      * 查看备份文件列表
-      * 选择要恢复的备份文件
-      * 输入备份密码完成恢复
-
-### 数据导入导出
-
-#### 支持的导入格式
-
-  * **加密备份文件** - 本系统导出的加密文件
-  * **JSON 格式** - 标准 JSON 或 2FAuth 格式
-  * **2FAS 格式** - 2FAS 应用的备份文件
-  * **纯文本格式** - 包含 TOTP URI 的文本文件
-
-#### 导出选项
-
-  * **加密导出** - 密码保护的安全备份文件
-  * **WebDAV 备份** - 直接上传到云存储
-
------
-
-## 🔒 安全说明
-
-### 数据保护
-
-  * **本地加密**：所有敏感数据在存储前使用 AES-GCM 加密
-  * **传输安全**：全程 HTTPS 加密传输
-  * **密钥管理**：使用强随机密钥和盐值
-  * **访问控制**：基于 OAuth 2.0 的身份验证
-
-### 隐私保护
-
-  * **最小权限**：只请求必要的 OAuth 权限
-  * **数据隔离**：每个用户的数据完全隔离
-  * **会话管理**：2小时自动过期的安全会话
-  * **审计日志**：记录但不存储敏感操作详情
-
-### 安全建议
-
-  * **强密码策略**：导出密码至少 12 个字符
-  * **定期备份**：建议每周进行一次完整备份
-  * **环境隔离**：生产环境使用独立的 OAuth 应用
-  * **密钥轮换**：定期更新 JWT 和加密密钥
-
------
-
-## 🛠️ 开发指南
-
-### 项目结构
-
-```
-2fa-secure-manager/
-├── src/
-│   └── index.js          # 主应用文件
-├── wrangler.toml         # Cloudflare Workers 配置
-├── package.json          # 项目依赖
-└── README.md             # 项目文档
+```bash
+wrangler login
+# 浏览器会弹出 Cloudflare 授权页，点击 Allow
 ```
 
-### 本地开发
+### 步骤 4：创建 KV 命名空间
 
-  * **启动开发服务器**
-    ```bash
-    wrangler dev
-    ```
-  * **查看日志**
-    ```bash
-    wrangler tail
-    ```
-  * **测试部署**
-    ```bash
-    wrangler deploy --dry-run
-    ```
+```bash
+wrangler kv:namespace create "USER_DATA"
+# 记下返回的 id，下一步要用
+```
 
-### API 接口
+返回示例：
+```json
+{ "id": "abcd1234efgh5678..." }
+```
 
-#### 认证相关
+### 步骤 5：创建 `wrangler.toml`
 
-  * `GET /api/oauth/authorize` - 获取 OAuth 授权 URL
-  * `GET|POST /api/oauth/callback` - OAuth 回调处理
+在仓库根目录创建 `wrangler.toml`，内容如下（替换里面的占位符）：
 
-#### 账户管理
+```toml
+name = "2fauth"
+main = "_worker.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
 
-  * `GET /api/accounts` - 获取账户列表
-  * `POST /api/accounts` - 添加新账户
-  * `PUT /api/accounts/:id` - 更新账户信息
-  * `DELETE /api/accounts/:id` - 删除账户
-  * `DELETE /api/accounts/clear-all` - 清空所有账户
+[[kv_namespaces]]
+binding = "USER_DATA"
+id = "your-kv-namespace-id-from-step-4"
 
-#### TOTP 功能
+[vars]
+OAUTH_ID = "2fauth-user"
+ALLOWED_EMAILS = "you@example.com,another@example.com"
+ALLOWED_ORIGINS = "https://2fa.yourdomain.com"
+```
 
-  * `POST /api/generate-totp` - 生成 TOTP 验证码
-  * `POST /api/parse-uri` - 解析 TOTP URI
-  * `POST /api/add-from-uri` - 从 URI 添加账户
+> 模式 B（LinuxDO OAuth）需要额外变量，见下文「模式 B 配置」一节。
 
-#### 数据备份
+### 步骤 6：设置密钥环境变量
 
-  * `GET /api/export-secure` - 加密导出数据
-  * `POST /api/import` - 导入数据
-  * `POST /api/import-secure` - 导入加密数据
+```bash
+# 主 JWT 密钥（用于签发会话）
+wrangler secret put JWT_SECRET
+# 粘贴一个 64 字符的随机 hex，例如：openssl rand -hex 32
 
-#### WebDAV 功能
+# 数据加密密钥（用于 AES-GCM 加密 2FA 数据）
+wrangler secret put ENCRYPTION_KEY
+# 同样：openssl rand -hex 32
+```
 
-  * `POST /api/test-webdav` - 测试 WebDAV 连接
-  * `POST /api/list-webdav-backups` - 列出备份文件
-  * `POST /api/export-webdav` - 导出到 WebDAV
-  * `POST /api/restore-webdav` - 从 WebDAV 恢复
-  * `POST /api/download-webdav` - 下载备份文件
+⚠️ **务必妥善保管这两个密钥**。一旦丢失 `ENCRYPTION_KEY`，已加密的 2FA 数据将无法恢复。
 
------
+### 步骤 7：部署 Worker
 
-## 🤝 贡献指南
+```bash
+wrangler deploy
+```
 
-我们欢迎各种形式的贡献！
+部署成功后会输出：
+```
+Published 2fauth (1.23 sec)
+  https://2fauth.<your-subdomain>.workers.dev
+```
 
-### 报告问题
+### 步骤 8：绑定自定义域名
 
-如果您发现了 bug 或有功能建议，请：
+1. 打开 Cloudflare Dashboard → 你的域名 → Workers Routes → Add route
+2. 或者：Workers & Pages → `2fauth` → Triggers → Custom Domains → Add Custom Domain
+3. 填入 `2fa.yourdomain.com`，保存
+4. Cloudflare 会自动创建 DNS 记录并签发 SSL 证书
 
-  * 查看现有的 [Issues](https://www.google.com/search?q=https://github.com/your-username/2fa-secure-manager/issues)
-  * 创建新的 Issue 并详细描述问题
-  * 提供复现步骤和环境信息
+至此两种模式共有的步骤完成，下面根据你选择的登录模式继续。
 
-### 提交代码
+---
 
-1.  Fork 本仓库
-2.  创建功能分支：`git checkout -b feature/amazing-feature`
-3.  提交更改：`git commit -m 'Add amazing feature'`
-4.  推送分支：`git push origin feature/amazing-feature`
-5.  创建 Pull Request
+## 🅰️ 模式 A：Cloudflare Access 邮箱 OTP（推荐）
 
-### 开发规范
+整套架构：用户访问 `2fa.yourdomain.com` → 自动跳转到 CF Access 邮箱 OTP 登录页 → 输入邮箱 → 收到 6 位 OTP → 输入验证码 → 跳回 2FAuth → 点击「第三方授权登录」按钮 → Worker 直接读 CF Access JWT 签发会话 → 进入主界面。
 
-  * 遵循现有的代码风格
-  * 添加必要的注释和文档
-  * 确保所有功能都有适当的错误处理
-  * 遵循安全最佳实践
+**优点**：
+- 零外部依赖，不需要 LinuxDO 或 GitHub OAuth 应用
+- Cloudflare 全球边缘节点处理 OTP 邮件，1-3 分钟内送达
+- 整个域名被 Access 保护，未登录用户无法访问任何路径
+- 邮箱白名单双层校验（Access + Worker）
 
------
+### 步骤 A1：启用 Cloudflare Zero Trust
 
-## 📄 许可证
+1. 打开 https://one.dash.cloudflare.com
+2. 选择你的账户，首次使用会引导你创建一个 Zero Trust 团队
+3. 团队名随意，例如 `myteam`，最终得到 `myteam.cloudflareaccess.com`
 
-本项目采用 MIT 许可证 - 查看 [LICENSE](https://www.google.com/search?q=LICENSE) 文件了解详情。
+### 步骤 A2：创建 Access Application
 
------
+1. Zero Trust Dashboard → Access → Applications → **Add an application**
+2. 选择 **Self-hosted**
+3. 填写：
+   - **Application name**: `2FAuth App`
+   - **Session Duration**: `8 hours`（或你喜欢的时长）
+   - **Application domain**: `2fa.yourdomain.com`（不要加路径，保护整个域名）
+4. 点击 Next 进入 Policy 配置
 
-## 🙏 致谢
+### 步骤 A3：创建邮箱白名单 Policy
 
-  * [Cloudflare Workers](https://workers.cloudflare.com/) - 无服务器计算平台
-  * [jsQR](https://github.com/cozmo/jsQR) - JavaScript 二维码解析库
-  * [Web Crypto API](https://developer.mozilla.org/zh-CN/docs/Web/API/Web_Crypto_API) - 浏览器加密 API
+1. **Policy name**: `Allow authorized emails`
+2. **Action**: `Allow`
+3. **Include** 区域：添加规则
+   - Selector: `Emails`
+   - Operator: `is`
+   - Value: `you@example.com`
+4. 点 **Add include** 重复添加其他邮箱（每个邮箱一条规则）
+5. 保存 Policy，再保存 Application
 
------
+### 步骤 A4：验证 Access 生效
+
+打开浏览器访问 `https://2fa.yourdomain.com/`，应该被 302 跳转到 `https://<team>.cloudflareaccess.com/cdn-cgi/access/login/...` 页面。
+
+输入白名单中的邮箱 → 收到 OTP → 输入 → 跳回 2FAuth 登录页。
+
+### 步骤 A5：完成登录
+
+1. 在 2FAuth 登录页点击「第三方授权登录」按钮
+2. Worker 读取请求头 `Cf-Access-Jwt-Assertion`，解码出 email
+3. 校验 email ∈ `ALLOWED_EMAILS`（双重防护）
+4. 签发 2fauth 自己的 JWT，写入浏览器 localStorage
+5. 自动跳转到主界面
+
+🎉 部署完成！
+
+---
+
+## 🅱️ 模式 B：LinuxDO OAuth 授权登录（原始方式）
+
+如果你已有 LinuxDO 账号并希望用它登录，使用此模式。需要先 fork 原始版本（不含 CF Access patch），或者修改本仓库的 `_worker.js` 恢复 OAuth 调用。
+
+### 步骤 B1：在 LinuxDO 创建 OAuth 应用
+
+1. 登录 https://linux.do
+2. 打开 https://linux.do/u/me/preferences/account → **OAuth 应用** 或直接访问 https://linux.do/oauth/applications
+3. 点击 **New Application**
+4. 填写：
+   - **Application name**: `2FAuth`
+   - **Redirect URI**: `https://2fa.yourdomain.com/api/oauth/callback`
+   - **Confidential**: ✅ 勾选
+   - **Scopes**: 默认（read + write）
+5. 提交后记录：
+   - **Client ID**（App ID，例如 `abc123def456...`）
+   - **Client Secret**（点 Reveal 显示）
+
+### 步骤 B2：获取你的 LinuxDO 用户 ID
+
+```bash
+# 用你的 LinuxDO 用户名替换 <username>
+curl -s "https://linux.do/u/<username>.json" | python3 -c "import sys,json; print(json.load(sys.stdin)['user']['id'])"
+```
+
+### 步骤 B3：配置 Worker 环境变量
+
+修改 `wrangler.toml` 的 `[vars]` 段，加入：
+
+```toml
+[vars]
+OAUTH_BASE_URL = "https://connect.linux.do"
+OAUTH_REDIRECT_URI = "https://2fa.yourdomain.com/api/oauth/callback"
+OAUTH_ID = "你的 LinuxDO 用户 ID（数字）"
+ALLOWED_ORIGINS = "https://2fa.yourdomain.com"
+```
+
+> LinuxDO 的 OAuth 端点是 `https://connect.linux.do`，路径为标准的 `/oauth2/authorize`、`/oauth2/token`、`/api/user`，与本仓库 `_worker.js` 完全兼容。
+
+设置 secret：
+
+```bash
+wrangler secret put OAUTH_CLIENT_ID
+# 粘贴 LinuxDO OAuth Client ID
+
+wrangler secret put OAUTH_CLIENT_SECRET
+# 粘贴 LinuxDO OAuth Client Secret
+
+wrangler secret put JWT_SECRET
+# openssl rand -hex 32
+
+wrangler secret put ENCRYPTION_KEY
+# openssl rand -hex 32
+```
+
+### 步骤 B4：重新部署
+
+```bash
+wrangler deploy
+```
+
+### 步骤 B5：完成登录
+
+1. 浏览器访问 `https://2fa.yourdomain.com/`
+2. 点击「第三方授权登录」按钮
+3. 跳转到 LinuxDO 授权页，点 Approve
+4. 跳回 2FAuth，自动登录
+
+🎉 部署完成！
+
+---
+
+## 📚 环境变量参考
+
+### 模式 A（CF Access）需要的变量
+
+| 变量名 | 类型 | 必需 | 示例 / 说明 |
+| --- | --- | --- | --- |
+| `USER_DATA` | KV binding | ✅ | 绑定到步骤 4 创建的 KV 命名空间 |
+| `JWT_SECRET` | secret | ✅ | `openssl rand -hex 32` |
+| `ENCRYPTION_KEY` | secret | ✅ | `openssl rand -hex 32` |
+| `OAUTH_ID` | var | ✅ | `2fauth-user`（统一用户 ID，所有邮箱共享数据） |
+| `ALLOWED_EMAILS` | var | ✅ | 逗号分隔的邮箱白名单 |
+| `ALLOWED_ORIGINS` | var | ✅ | `https://2fa.yourdomain.com` |
+
+### 模式 B（LinuxDO OAuth）需要的变量
+
+| 变量名 | 类型 | 必需 | 示例 / 说明 |
+| --- | --- | --- | --- |
+| `USER_DATA` | KV binding | ✅ | 同上 |
+| `JWT_SECRET` | secret | ✅ | 同上 |
+| `ENCRYPTION_KEY` | secret | ✅ | 同上 |
+| `OAUTH_BASE_URL` | var | ✅ | `https://connect.linux.do` |
+| `OAUTH_REDIRECT_URI` | var | ✅ | `https://2fa.yourdomain.com/api/oauth/callback` |
+| `OAUTH_ID` | var | ✅ | 你的 LinuxDO 数字用户 ID |
+| `OAUTH_CLIENT_ID` | secret | ✅ | LinuxDO OAuth Client ID |
+| `OAUTH_CLIENT_SECRET` | secret | ✅ | LinuxDO OAuth Client Secret |
+| `ALLOWED_ORIGINS` | var | ✅ | `https://2fa.yourdomain.com` |
+
+---
+
+## 🛠️ 管理操作
+
+### 添加/删除登录邮箱（模式 A）
+
+需要同步修改两处：
+
+1. **Cloudflare Access Policy**：
+   - Zero Trust Dashboard → Access → Applications → `2FAuth App` → Policies
+   - 编辑 `Allow authorized emails` → Add/Remove include rule
+
+2. **Worker 的 `ALLOWED_EMAILS` 变量**（双保险）：
+   - Dashboard → Workers & Pages → `2fauth` → Settings → Variables
+   - 修改 `ALLOWED_EMAILS` 值（逗号分隔）
+
+### 查看实时日志
+
+```bash
+wrangler tail 2fauth
+```
+
+### 更新代码
+
+修改 `_worker.js` 后：
+```bash
+wrangler deploy
+```
+
+---
+
+## 🔒 安全建议
+
+1. **妥善保管 `JWT_SECRET` 和 `ENCRYPTION_KEY`**
+   - `ENCRYPTION_KEY` 丢失 = 2FA 数据无法恢复
+   - 建议同时备份到密码管理器
+
+2. **不要在公开仓库提交 `wrangler.toml` 中的密钥**
+   - 真正的密钥用 `wrangler secret put` 设置，不在 toml 里
+   - `wrangler.toml` 只放非敏感配置（域名、KV ID、邮箱白名单等）
+
+3. **定期备份**
+   - 每周通过 WebDAV 创建加密备份
+
+4. **模式 A 比 B 更安全**
+   - 模式 A 整个域名在 Access 后面，未登录用户无法访问任何 API
+   - 模式 B 的 API 接口在 OAuth 登录前是公开的（虽然需要 JWT 才能调用）
+
+---
+
+## 🩺 故障排查
+
+| 现象 | 排查方向 |
+| --- | --- |
+| 打开页面一直跳 Access 登录页 | 浏览器禁用了 cookie，允许 `2fa.yourdomain.com` 的 cookie |
+| 输入邮箱提示不在白名单 | 邮箱未加入 Access Policy include，或 `ALLOWED_EMAILS` 未同步 |
+| OTP 收不到 | 检查邮箱垃圾箱；CF Access OTP 通常 1-3 分钟送达 |
+| 模式 A 点登录后提示 `CF Access JWT missing` | Access 应用配置错误，确保 domain 是 `2fa.yourdomain.com`（不含路径） |
+| 模式 A 提示 `Email xxx is not allowed` | Worker 的 `ALLOWED_EMAILS` 未包含当前邮箱 |
+| 模式 B 登录后提示 `Unauthorized user` | `OAUTH_ID` 配置错误，应该填你的 LinuxDO 数字用户 ID |
+| 模式 B 提示 `Token exchange failed` | `OAUTH_CLIENT_SECRET` 错误，或 LinuxDO OAuth 应用已禁用 |
+| API 返回 401 | 2fauth JWT 过期（2 小时），重新点登录按钮续期 |
+| 加密数据无法解密 | `ENCRYPTION_KEY` 被更改过；恢复原 key |
+
+---
 
 ## 📞 支持
 
-如果您需要帮助或有任何问题：
+- 🐛 Bug 报告：[GitHub Issues](https://github.com/cshdotcom/2fauth/issues)
+- 💬 讨论：[GitHub Discussions](https://github.com/cshdotcom/2fauth/discussions)
 
-  * 📧 **邮箱**：your-email@example.com
-  * 💬 **讨论**：[GitHub Discussions](https://www.google.com/search?q=https://github.com/your-username/2fa-secure-manager/discussions)
-  * 🐛 **Bug 报告**：[GitHub Issues](https://www.google.com/search?q=https://github.com/your-username/2fa-secure-manager/issues)
+如果这个项目对您有帮助，请给我们一个 ⭐ Star！
 
-⭐ 如果这个项目对您有帮助，请给我们一个 Star！
+---
+
+## 📄 许可证
+
+MIT License — 详见 [LICENSE](LICENSE)
