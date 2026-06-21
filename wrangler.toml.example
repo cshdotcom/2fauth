@@ -1,0 +1,50 @@
+# 2FAuth Worker 配置模板
+# 用法：复制本文件为 wrangler.toml，把占位符替换成你的真实值后运行 `wrangler deploy`
+#
+# cp wrangler.toml.example wrangler.toml
+# 然后编辑 wrangler.toml
+
+name = "2fauth"
+main = "_worker.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# ============================================================
+# KV 命名空间 — 用 `wrangler kv:namespace create "USER_DATA"` 创建
+# 把返回的 id 填到下面
+# ============================================================
+[[kv_namespaces]]
+binding = "USER_DATA"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
+# ============================================================
+# 非敏感环境变量（可以放在 toml 里）
+# 真正的密钥请用 `wrangler secret put SECRET_NAME` 设置，不要写在这里
+# ============================================================
+[vars]
+# 统一用户 ID（所有允许登录的邮箱共享一份数据）
+OAUTH_ID = "2fauth-user"
+
+# 允许登录的邮箱白名单（逗号分隔，必须与 CF Access Policy 中的邮箱一致）
+ALLOWED_EMAILS = "you@example.com,another@example.com"
+
+# 应用对外访问地址（用于 CORS）
+ALLOWED_ORIGINS = "https://2fa.yourdomain.com"
+
+# OAuth 回调地址（CF Access 模式下不实际使用，但保留以兼容代码）
+OAUTH_REDIRECT_URI = "https://2fa.yourdomain.com/api/oauth/callback"
+
+# Cloudflare Turnstile site key（在 CF Dashboard → Turnstile 创建 widget 获取）
+# 这个值是公开的，可以放在 toml 里。Secret key 用 `wrangler secret put TURNSTILE_SECRET_KEY` 设置
+TURNSTILE_SITE_KEY = "REPLACE_WITH_YOUR_TURNSTILE_SITE_KEY"
+
+# ============================================================
+# 必须用 `wrangler secret put` 设置的密钥（不要写在本文件里！）
+# ============================================================
+# wrangler secret put JWT_SECRET          # openssl rand -hex 32
+# wrangler secret put ENCRYPTION_KEY      # openssl rand -hex 32（务必备份，丢失则 2FA 数据无法恢复）
+# wrangler secret put TURNSTILE_SECRET_KEY  # Turnstile widget 的 secret key
+#
+# 如果使用 LinuxDO OAuth 模式（模式 B），还需要：
+# wrangler secret put OAUTH_CLIENT_ID
+# wrangler secret put OAUTH_CLIENT_SECRET
