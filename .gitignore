@@ -1,0 +1,14 @@
+# 真实 wrangler.toml 包含你的 KV ID、邮箱白名单等，不要提交
+wrangler.toml
+
+# Node 依赖
+node_modules/
+
+# Wrangler 本地状态
+.wrangler/
+
+# 临时文件
+*.log
+.DS_Store
+.env
+.env.local
