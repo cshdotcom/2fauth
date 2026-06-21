@@ -8,7 +8,7 @@ const BASE32_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 const SECURITY_CONFIG = {
     MAX_LOGIN_ATTEMPTS: 5,
     LOCKOUT_TIME: 15 * 60 * 1000,
-    JWT_EXPIRY: 2 * 60 * 60,
+    JWT_EXPIRY: 15 * 60,  // 15 分钟，与 CF Access session_duration 同步
     MAX_INPUT_LENGTH: 100,
     MIN_EXPORT_PASSWORD_LENGTH: 12,
     OAUTH_TIMEOUT: 30 * 1000,
@@ -2410,7 +2410,7 @@ header h1 {
                     <span>安全连接</span>
                 </div>
                 <div class="session-timer" id="sessionTimer">
-                    会话剩余: <span id="sessionTimeLeft">2:00:00</span>
+                    会话剩余: <span id="sessionTimeLeft">15:00</span>
                 </div>
                 <div class="user-profile" id="userProfile">
                     <img id="userAvatar" class="user-avatar" src="" alt="用户头像">
@@ -2788,16 +2788,15 @@ header h1 {
                     return;
                 }
                 
-                const hours = Math.floor(timeLeft / 3600000);
-                const minutes = Math.floor((timeLeft % 3600000) / 60000);
+                const minutes = Math.floor(timeLeft / 60000);
                 const seconds = Math.floor((timeLeft % 60000) / 1000);
                 const timerElement = document.getElementById('sessionTimeLeft');
                 if (timerElement) {
-                    timerElement.textContent = \`\${hours}:\${minutes.toString().padStart(2, '0')}:\${seconds.toString().padStart(2, '0')}\`;
+                    timerElement.textContent = \`\${minutes}:\${seconds.toString().padStart(2, '0')}\`;
                 }
                 
                 const sessionTimerElement = document.getElementById('sessionTimer');
-                if (timeLeft <= 10 * 60 * 1000) {
+                if (timeLeft <= 3 * 60 * 1000) {  // 3 分钟内显示警告
                     sessionTimerElement.classList.add('warning');
                 } else {
                     sessionTimerElement.classList.remove('warning');
