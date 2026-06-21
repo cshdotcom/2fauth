@@ -1062,11 +1062,10 @@ function getMainHTML() {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://jsdelivr.b-cdn.net; style-src 'self' 'unsafe-inline' *; font-src 'self' https://jsdelivr.b-cdn.net; img-src 'self' data: https:; connect-src 'self';"> 
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https:; connect-src 'self';">
     <meta http-equiv="X-Content-Type-Options" content="nosniff">
     <meta http-equiv="X-Frame-Options" content="DENY">
     <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin">
-    <link rel="stylesheet" href="https://jsdelivr.b-cdn.net/npm/@fortawesome/fontawesome-free@6.0.0/css/all.min.css">
 
 
 
@@ -2431,17 +2430,15 @@ header h1 {
                     
                 <button onclick="startOAuthLogin()" class="oauth-login-btn">
                     <span class="oauth-icon">
-                        <img src="https://linux.do/logo-256.svg" 
-                             alt="Logo" 
-                             style="width: 40px; height: 40px; object-fit: contain;">
+                        <svg viewBox="0 0 62 50" width="36" height="29" style="fill:#333"><path d="M21.3 15.6h-7.8C17.2 6.4 26.1 0 36.6 0c13.7 0 24.9 11.1 24.9 24.9 0 13.7-11.1 24.9-24.9 24.9-10.4 0-19.4-6.4-23.1-15.6h7.8c3.1 5.1 8.8 8.6 15.3 8.6 9.9 0 17.9-8 17.9-17.9 0-9.9-8-17.9-17.9-17.9-6.5 0-12.1 3.4-15.3 8.6zm-12 14l-3.1-3.1h36.7c1.4 0 2.1 1.7 1.1 2.7l-6.2 6.2-2.2-2.2 3.6-3.6H9.3zm23-12.9l2.2-2.2 6.2 6.2c1 1 .3 2.7-1.1 2.7H3.1L0 20.2h35.9l-3.6-3.5z"/></svg>
                     </span>
-                    <span>使用Linux.do账号登录</span>
+                    <span>使用 Cloudflare Access 登录</span>
                 </button>
                 
                 <!-- GitHub 开源仓库链接 -->
                 <div class="github-link">
                     <a href="https://github.com/ilikeeu/2fauth" target="_blank" rel="noopener noreferrer">
-                        <i class="fab fa-github"></i>
+                        <svg viewBox="0 0 16 16" width="14" height="14" style="vertical-align:-2px;fill:currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
                         2fauth - 现代化双因素认证(2FA)管理系统
                     </a>
                 </div>
@@ -2703,7 +2700,23 @@ header h1 {
         </div>
     </div>
     
-    <script src="https://jsdelivr.b-cdn.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <script>
+        // Lazy-load jsQR only when scanner is opened (saves ~50KB on initial page load)
+        window._jsQRLoaded = false;
+        window._jsQRLoading = null;
+        window.ensureJsQR = function() {
+            if (window._jsQRLoaded) return Promise.resolve();
+            if (window._jsQRLoading) return window._jsQRLoading;
+            window._jsQRLoading = new Promise((resolve, reject) => {
+                const s = document.createElement('script');
+                s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
+                s.onload = () => { window._jsQRLoaded = true; resolve(); };
+                s.onerror = () => reject(new Error('Failed to load jsQR'));
+                document.head.appendChild(s);
+            });
+            return window._jsQRLoading;
+        };
+    </script>
     <script>
         let authToken = localStorage.getItem('authToken');
         let loginTime = localStorage.getItem('loginTime');
@@ -3925,7 +3938,10 @@ header h1 {
                     showFloatingMessage('❌ 您的浏览器不支持摄像头功能', 'error');
                     return;
                 }
-                
+
+                showFloatingMessage('⏳ 正在加载二维码扫描器...', 'info');
+                await ensureJsQR();  // lazy-load jsQR
+
                 cameraStream = await navigator.mediaDevices.getUserMedia({
                     video: { 
                         facingMode: 'environment',
@@ -4002,7 +4018,7 @@ header h1 {
             document.getElementById('qrImageInput').click();
         }
         
-        function processQRImage(input) {
+        async function processQRImage(input) {
             const file = input.files[0];
             if (!file) return;
             
@@ -4017,6 +4033,13 @@ header h1 {
             }
             
             showFloatingMessage('🔄 正在识别二维码...', 'warning');
+            
+            try {
+                await ensureJsQR();  // lazy-load jsQR
+            } catch (e) {
+                showFloatingMessage('❌ 二维码库加载失败', 'error');
+                return;
+            }
             
             const reader = new FileReader();
             reader.onload = function(e) {
@@ -5931,7 +5954,7 @@ export default {
                         'X-Content-Type-Options': 'nosniff',
                         'X-Frame-Options': 'DENY',
                         'Referrer-Policy': 'strict-origin-when-cross-origin',
-                        'Content-Security-Policy': "default-src 'self' data:; script-src 'self' 'unsafe-inline' https://jsdelivr.b-cdn.net; style-src 'self' 'unsafe-inline' data: https://jsdelivr.b-cdn.net; font-src 'self' data: https://jsdelivr.b-cdn.net; img-src 'self' data: https:; connect-src 'self';"
+                        'Content-Security-Policy': "default-src 'self' data:; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' data:; font-src 'self' data:; img-src 'self' data: https:; connect-src 'self';"
                     }
                 });
             }
