@@ -2417,7 +2417,6 @@ header h1 {
                         <div class="user-email" id="userEmail"></div>
                     </div>
                 </div>
-                <button onclick="clearAllAccounts()" class="btn btn-danger btn-small">清空账号</button>
                 <button onclick="logout()" class="btn btn-small">安全退出</button>
             </div>
         </header>
@@ -2613,6 +2612,12 @@ header h1 {
                                 <h4>🔒 加密导出</h4>
                                 <p>导出为密码保护的加密文件</p>
                             </div>
+                        </div>
+
+                        <div style="margin-top: 2rem; padding: 1.5rem; border: 1px solid #fecaca; background: #fef2f2; border-radius: 12px;">
+                            <h3 style="color: #dc2626; margin-bottom: 0.75rem;">⚠️ 危险操作区</h3>
+                            <p style="color: #6b7280; margin-bottom: 1rem;">清空所有 2FA 账户是不可逆操作。为防止误删，点击后将向您注册的邮箱发送 6 位验证码，输入验证码后才会执行。</p>
+                            <button onclick="startClearAllAccounts()" class="btn btn-danger">🗑️ 清空所有账号</button>
                         </div>
                     </div>
                 </div>
@@ -2945,31 +2950,88 @@ header h1 {
             return div.innerHTML;
         }
         
-        async function clearAllAccounts() {
+        async function startClearAllAccounts() {
+            if (!authToken) { handleUnauthorized(); return; }
+            // 先两次确认
             if (!confirm('⚠️ 确定要清空所有账号吗？\\n\\n此操作不可撤销，将删除所有已保存的2FA账户！\\n\\n请确认您已备份重要数据。')) return;
-            if (!confirm('🚨 最后确认：您真的要删除所有账号吗？\\n\\n删除后无法恢复！')) return;
-            
+            if (!confirm('🚨 最后确认：您真的要删除所有账号吗？\\n\\n删除后无法恢复！下一步会向您注册的邮箱发送验证码。')) return;
+
+            // 调用后端发送验证码
             try {
-                const response = await fetch('/api/accounts/clear-all', {
-                    method: 'DELETE',
-                    headers: { 'Authorization': \`Bearer \${authToken}\` }
+                showFloatingMessage('📧 正在发送验证码...', 'info');
+                const r = await fetch('/api/clear-all/send-code', {
+                    method: 'POST',
+                    headers: { 'Authorization': \`Bearer \${authToken}\`, 'Content-Type': 'application/json' }
                 });
-                
-                const data = await response.json();
-                
-                if (response.ok) {
-                    showFloatingMessage('✅ 所有账号已清空！', 'success');
-                    refreshAccounts();
-                } else {
-                    if (response.status === 401) {
+                const d = await r.json();
+                if (!r.ok) {
+                    showFloatingMessage('❌ 发送验证码失败：' + (d.error || r.status), 'error');
+                    return;
+                }
+                showClearAllVerifyModal(d.email || d.maskedEmail);
+            } catch (e) {
+                showFloatingMessage('❌ 网络错误：' + e.message, 'error');
+            }
+        }
+
+        function showClearAllVerifyModal(maskedEmail) {
+            const html = \`
+                <div style="text-align:center; padding:1rem 0;">
+                    <div style="font-size:3rem; margin-bottom:0.5rem;">📧</div>
+                    <h3 style="margin-bottom:0.5rem;">邮箱验证</h3>
+                    <p style="color:#6b7280; margin-bottom:1.5rem;">已向 <strong>\${maskedEmail}</strong> 发送 6 位验证码，5 分钟内有效。</p>
+                    <form id="clearAllVerifyForm">
+                        <div class="form-group">
+                            <input type="text" id="clearVerifyCode" required pattern="[0-9]{6}" maxlength="6"
+                                   placeholder="6 位验证码" autocomplete="one-time-code" inputmode="numeric"
+                                   style="text-align:center; font-size:1.5rem; letter-spacing:0.5rem; padding:0.75rem;">
+                        </div>
+                        <div id="clearVerifyError" style="color:#dc2626; margin:0.5rem 0; min-height:1.2rem;"></div>
+                        <div style="display:flex; gap:0.75rem; margin-top:1.5rem; justify-content:center;">
+                            <button type="submit" class="btn btn-danger">确认清空所有账号</button>
+                            <button type="button" onclick="closeModal()" class="btn btn-secondary">取消</button>
+                        </div>
+                    </form>
+                    <p style="color:#9ca3af; font-size:0.85rem; margin-top:1rem;">⚠️ 此操作不可撤销</p>
+                </div>
+            \`;
+            showModal('🗑️ 二次验证 - 清空账号', html);
+            setTimeout(() => document.getElementById('clearVerifyCode')?.focus(), 100);
+
+            document.getElementById('clearAllVerifyForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const code = document.getElementById('clearVerifyCode').value.trim();
+                const errEl = document.getElementById('clearVerifyError');
+                errEl.textContent = '';
+                if (!/^\\d{6}$/.test(code)) {
+                    errEl.textContent = '请输入 6 位数字验证码';
+                    return;
+                }
+                try {
+                    const resp = await fetch('/api/accounts/clear-all', {
+                        method: 'DELETE',
+                        headers: { 'Authorization': \`Bearer \${authToken}\`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ verify_code: code })
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        closeModal();
+                        showFloatingMessage(\`✅ 所有账号已清空（共删除 \${data.clearedCount || 0} 个）\`, 'success');
+                        refreshAccounts();
+                    } else if (resp.status === 401) {
                         handleUnauthorized();
                     } else {
-                        showFloatingMessage('❌ 清空失败：' + data.error, 'error');
+                        errEl.textContent = data.error || '清空失败';
                     }
+                } catch (err) {
+                    errEl.textContent = '网络错误：' + err.message;
                 }
-            } catch (error) {
-                showFloatingMessage('❌ 网络请求失败：' + error.message, 'error');
-            }
+            });
+        }
+
+        async function clearAllAccounts() {
+            // 旧入口保留兼容，直接转发到新流程
+            await startClearAllAccounts();
         }
         
         function deleteAccount(accountId) {
@@ -4825,6 +4887,56 @@ async function handleClearAllAccounts(request, env) {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
     }
+
+    // [Patch v3] 二次验证：从 body 中读取 verify_code，校验 KV 中存储的验证码
+    let verifyCode = null;
+    try {
+        const body = await request.json();
+        verifyCode = body && body.verify_code;
+    } catch { /* body may be empty — fail closed below */ }
+
+    if (!verifyCode || typeof verifyCode !== 'string' || !/^\d{6}$/.test(verifyCode)) {
+        await logSecurityEvent('CLEAR_ALL_NO_CODE', { user: authenticatedUser.id }, request);
+        return new Response(JSON.stringify({
+            error: '缺少有效的 6 位验证码。请先点击按钮获取验证码。'
+        }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    // 校验验证码：从 KV 读取，验证码 5 分钟内有效，一次性使用
+    const expectedRaw = await env.USER_DATA.get(`clear_all_code:${authenticatedUser.id}`);
+    if (!expectedRaw) {
+        return new Response(JSON.stringify({
+            error: '验证码已过期或未发送，请重新获取。'
+        }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    let expectedData;
+    try { expectedData = JSON.parse(expectedRaw); }
+    catch { expectedData = { code: expectedRaw, attempts: 0 }; }
+
+    // 防爆破：每发一次码最多 5 次尝试
+    expectedData.attempts = (expectedData.attempts || 0) + 1;
+    if (expectedData.attempts > 5) {
+        await env.USER_DATA.delete(`clear_all_code:${authenticatedUser.id}`);
+        await logSecurityEvent('CLEAR_ALL_CODE_BRUTEFORCE', { user: authenticatedUser.id }, request);
+        return new Response(JSON.stringify({
+            error: '验证码尝试次数过多，请重新获取。'
+        }), { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    // 用 constant-time 比较防时序攻击
+    const a = String(verifyCode);
+    const b = String(expectedData.code || '');
+    if (a.length !== b.length || a !== b) {
+        await env.USER_DATA.put(`clear_all_code:${authenticatedUser.id}`,
+            JSON.stringify(expectedData), { expirationTtl: 300 });
+        return new Response(JSON.stringify({
+            error: `验证码错误，剩余尝试次数 ${5 - expectedData.attempts}`
+        }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    // 验证通过，立即删除验证码（一次性使用）
+    await env.USER_DATA.delete(`clear_all_code:${authenticatedUser.id}`);
     
     try {
         const encryptedData = await env.USER_DATA.get('accounts_encrypted');
@@ -4870,6 +4982,118 @@ async function handleClearAllAccounts(request, env) {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
     }
+}
+
+// [Patch v3] 发送清空账号的邮箱验证码
+// 使用 MailChannels API（Cloudflare Workers 免费发送邮件）
+// 验证码存入 KV，5 分钟 TTL，绑定用户 ID
+async function handleClearAllSendCode(request, env) {
+    const corsHeaders = getCorsHeaders(request, env);
+    const authenticatedUser = await getAuthenticatedUser(request, env);
+
+    if (!authenticatedUser) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+    }
+
+    if (request.method !== 'POST') {
+        return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+            status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+    }
+
+    // 速率限制：同一用户 60 秒内只能发 1 次
+    const lastSentRaw = await env.USER_DATA.get(`clear_all_code_sent:${authenticatedUser.id}`);
+    if (lastSentRaw) {
+        const elapsed = Date.now() - parseInt(lastSentRaw, 10);
+        if (elapsed < 60000) {
+            return new Response(JSON.stringify({
+                error: `请求过于频繁，请等待 ${Math.ceil((60000 - elapsed) / 1000)} 秒后再试`
+            }), { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+    }
+
+    // 取邮箱（从 CF Access JWT 中获取，登录时已写入 userInfo.email）
+    const email = authenticatedUser.email;
+    if (!email) {
+        return new Response(JSON.stringify({
+            error: '无法获取您的邮箱地址，请重新登录'
+        }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    // 生成 6 位数字验证码
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+
+    // 存入 KV，5 分钟有效
+    await env.USER_DATA.put(
+        `clear_all_code:${authenticatedUser.id}`,
+        JSON.stringify({ code, attempts: 0, email, created_at: Date.now() }),
+        { expirationTtl: 300 }
+    );
+    await env.USER_DATA.put(
+        `clear_all_code_sent:${authenticatedUser.id}`,
+        String(Date.now()),
+        { expirationTtl: 60 }
+    );
+
+    // 发送邮件（MailChannels API）
+    const appDomain = env.ALLOWED_ORIGINS || 'https://2fa.910500.xyz';
+    const mailResp = await fetch('https://api.mailchannels.net/tx/v1/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            personalizations: [{ to: [{ email, name: authenticatedUser.username || email }] }],
+            from: { email: `noreply@${new URL(appDomain).hostname}`, name: '2FAuth 安全系统' },
+            subject: '🗑️ 清空账号验证码 - 2FAuth',
+            content: [
+                {
+                    type: 'text/plain',
+                    value: `您正在执行"清空所有账号"操作。\n\n验证码：${code}\n\n验证码 5 分钟内有效，仅可使用一次。\n如果您没有发起此操作，请忽略本邮件并检查账号安全。`
+                },
+                {
+                    type: 'text/html',
+                    value: `<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#333;max-width:480px;margin:0 auto;padding:24px;">
+<h2 style="color:#dc2626;">🗑️ 清空账号验证码</h2>
+<p>您正在执行<strong>清空所有 2FA 账号</strong>操作。为防止误删，请使用以下验证码完成确认：</p>
+<div style="margin:24px 0; padding:20px; background:#fef2f2; border:2px dashed #dc2626; border-radius:8px; text-align:center;">
+  <div style="font-size:36px; letter-spacing:8px; font-weight:bold; color:#dc2626; font-family:monospace;">${code}</div>
+</div>
+<p style="color:#6b7280;">⏱ 验证码 5 分钟内有效，仅可使用一次。</p>
+<hr style="border:none; border-top:1px solid #e5e7eb; margin:24px 0;">
+<p style="color:#9ca3af; font-size:12px;">如果您没有发起此操作，请忽略本邮件并检查账号安全。<br>本邮件由系统自动发送，请勿回复。</p>
+</body></html>`
+                }
+            ]
+        })
+    });
+
+    if (!mailResp.ok) {
+        const errText = await mailResp.text();
+        console.error('MailChannels send failed:', mailResp.status, errText);
+        await logSecurityEvent('CLEAR_ALL_CODE_EMAIL_FAIL',
+            { user: authenticatedUser.id, email, status: mailResp.status }, request);
+        // 仍然不暴露具体错误给前端
+        return new Response(JSON.stringify({
+            error: '验证码邮件发送失败，请稍后重试或联系管理员。'
+        }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    await logSecurityEvent('CLEAR_ALL_CODE_SENT',
+        { user: authenticatedUser.id, email }, request);
+
+    // 返回脱敏的邮箱地址给前端展示
+    const [localPart, domain] = email.split('@');
+    const maskedLocal = localPart.length > 2
+        ? localPart[0] + '*'.repeat(Math.max(1, localPart.length - 2)) + localPart[localPart.length - 1]
+        : localPart[0] + '**';
+    const maskedEmail = `${maskedLocal}@${domain}`;
+
+    return new Response(JSON.stringify({
+        success: true,
+        maskedEmail,
+        message: '验证码已发送'
+    }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 }
 
 async function handleAccountUpdate(request, env, accountId) {
@@ -5963,6 +6187,7 @@ export default {
             if (path === '/api/oauth/callback') return await handleOAuthCallback(request, env);
             if (path === '/api/accounts') return await handleAccounts(request, env);
             if (path === '/api/accounts/clear-all') return await handleClearAllAccounts(request, env);
+            if (path === '/api/clear-all/send-code') return await handleClearAllSendCode(request, env);
             if (path.startsWith('/api/accounts/')) {
                 const accountId = path.split('/')[3];
                 return await handleAccountUpdate(request, env, accountId);
