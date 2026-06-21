@@ -2982,7 +2982,9 @@ header h1 {
 
                         <div class="form-group" style="margin-top:1.25rem;">
                             <label style="font-weight:600; display:block; margin-bottom:0.5rem;">完成人机验证：</label>
-                            <div id="turnstileWidget" style="min-height:65px;"></div>
+                            <div id="turnstileWidget" style="min-height:65px; display:flex; align-items:center; justify-content:center;">
+                                <div id="turnstileLoading" style="color:#6b7280; font-size:0.85rem;">⏳ 正在加载验证组件...</div>
+                            </div>
                         </div>
 
                         <div id="clearVerifyError" style="color:#dc2626; margin:0.75rem 0; min-height:1.2rem;"></div>
@@ -2998,52 +3000,82 @@ header h1 {
             \`;
             showModal('🗑️ 二次验证 - 清空账号', html);
 
-            // 加载 Turnstile widget
-            let turnstileToken = null;
+            // === Turnstile widget 渲染 ===
+            // 用闭包保存 token，submit 处理器通过 window.__clearAllToken 读取
+            window.__clearAllToken = null;
             const submitBtn = document.getElementById('clearAllSubmitBtn');
 
-            // 动态加载 Turnstile JS（仅在该 modal 打开时）
-            if (!document.getElementById('cf-turnstile-script')) {
-                const s = document.createElement('script');
-                s.id = 'cf-turnstile-script';
-                s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?onload=__onTurnstileLoad&render=explicit';
-                s.async = true;
-                s.defer = true;
-                document.head.appendChild(s);
-            }
-
-            window.__onTurnstileLoad = window.__onTurnstileLoad || function() {};
-            window.__renderTurnstile = function() {
-                if (window.turnstile && document.getElementById('turnstileWidget')) {
+            const renderWidget = () => {
+                const container = document.getElementById('turnstileWidget');
+                if (!container) return false;
+                // 清掉 loading 占位
+                container.innerHTML = '';
+                try {
                     window.turnstile.render('#turnstileWidget', {
                         sitekey: siteKey,
                         callback: function(token) {
-                            turnstileToken = token;
+                            window.__clearAllToken = token;
                             submitBtn.disabled = false;
                             submitBtn.style.opacity = '1';
                             submitBtn.style.cursor = 'pointer';
                         },
-                        'error-callback': function() {
-                            document.getElementById('clearVerifyError').textContent = '人机验证失败，请刷新重试';
+                        'error-callback': function(err) {
+                            console.error('Turnstile error:', err);
+                            document.getElementById('clearVerifyError').textContent = '人机验证加载失败，请刷新页面后重试';
                         },
                         'expired-callback': function() {
-                            turnstileToken = null;
+                            window.__clearAllToken = null;
                             submitBtn.disabled = true;
                             submitBtn.style.opacity = '0.5';
                             submitBtn.style.cursor = 'not-allowed';
                         },
-                        theme: 'light'
+                        theme: 'light',
+                        language: 'zh-cn'
                     });
+                    return true;
+                } catch (e) {
+                    console.error('Turnstile render failed:', e);
+                    return false;
                 }
             };
 
-            // 如果 turnstile 已加载，立即渲染；否则等脚本 onload
-            if (window.turnstile) {
-                window.__renderTurnstile();
-            } else {
-                // 覆盖 onload 回调，让 api.js 加载完后调用
-                window.__onTurnstileLoad = window.__renderTurnstile;
-            }
+            // 确保脚本加载完，然后渲染
+            const ensureScriptAndRender = () => {
+                if (window.turnstile) {
+                    // turnstile 已加载，等 modal 完全显示后渲染（next tick）
+                    requestAnimationFrame(() => requestAnimationFrame(renderWidget));
+                } else {
+                    // 动态加载脚本
+                    if (!document.getElementById('cf-turnstile-script')) {
+                        // 设置全局回调（api.js 加载完会调用）
+                        window.__onTurnstileLoad = function() {
+                            requestAnimationFrame(() => requestAnimationFrame(renderWidget));
+                        };
+                        const s = document.createElement('script');
+                        s.id = 'cf-turnstile-script';
+                        s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?onload=__onTurnstileLoad&render=explicit';
+                        s.async = true;
+                        s.defer = true;
+                        s.onerror = () => {
+                            document.getElementById('turnstileLoading').textContent = '❌ 验证组件加载失败，请检查网络';
+                        };
+                        document.head.appendChild(s);
+                    } else {
+                        // 脚本存在但还没加载完，注册个轮询
+                        const tryRender = () => {
+                            if (window.turnstile) {
+                                requestAnimationFrame(() => requestAnimationFrame(renderWidget));
+                            } else {
+                                setTimeout(tryRender, 200);
+                            }
+                        };
+                        setTimeout(tryRender, 200);
+                    }
+                }
+            };
+
+            // 启动加载流程
+            ensureScriptAndRender();
 
             setTimeout(() => document.getElementById('clearConfirmEmail')?.focus(), 100);
 
@@ -3056,8 +3088,9 @@ header h1 {
                     errEl.textContent = '请输入您的登录邮箱';
                     return;
                 }
-                if (!turnstileToken) {
-                    errEl.textContent = '请先完成人机验证';
+                const token = window.__clearAllToken;
+                if (!token) {
+                    errEl.textContent = '请先完成人机验证（如未显示验证框，请刷新页面重试）';
                     return;
                 }
                 submitBtn.disabled = true;
@@ -3066,7 +3099,7 @@ header h1 {
                     const resp = await fetch('/api/accounts/clear-all', {
                         method: 'DELETE',
                         headers: { 'Authorization': \`Bearer \${authToken}\`, 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ turnstile_token: turnstileToken, confirm_email: email })
+                        body: JSON.stringify({ turnstile_token: token, confirm_email: email })
                     });
                     const data = await resp.json();
                     if (resp.ok) {
@@ -3079,7 +3112,6 @@ header h1 {
                         errEl.textContent = data.error || '清空失败';
                         submitBtn.disabled = false;
                         submitBtn.textContent = '确认清空所有账号';
-                        // 重置 Turnstile 让用户重试
                         if (window.turnstile) window.turnstile.reset();
                     }
                 } catch (err) {
