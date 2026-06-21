@@ -1056,13 +1056,14 @@ async function processOAuthCode(code, state, clientIP, request, env, corsHeaders
 }
 
 // ===== HTML 页面（压缩版） =====
-function getMainHTML() {
+function getMainHTML(env) {
+    const turnstileSiteKey = (env && env.TURNSTILE_SITE_KEY) || '';
     return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https:; connect-src 'self';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https:; frame-src https://challenges.cloudflare.com; connect-src 'self';">
     <meta http-equiv="X-Content-Type-Options" content="nosniff">
     <meta http-equiv="X-Frame-Options" content="DENY">
     <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin">
@@ -2399,6 +2400,7 @@ header h1 {
 
 </head>
 <body>
+    <script>window.TURNSTILE_SITE_KEY = ${JSON.stringify(turnstileSiteKey)};</script>
     <div class="container">
         <header>
             <h1>🔐 2FA 安全管理系统</h1>
@@ -2954,64 +2956,117 @@ header h1 {
             if (!authToken) { handleUnauthorized(); return; }
             // 先两次确认
             if (!confirm('⚠️ 确定要清空所有账号吗？\\n\\n此操作不可撤销，将删除所有已保存的2FA账户！\\n\\n请确认您已备份重要数据。')) return;
-            if (!confirm('🚨 最后确认：您真的要删除所有账号吗？\\n\\n删除后无法恢复！下一步会向您注册的邮箱发送验证码。')) return;
+            if (!confirm('🚨 最后确认：您真的要删除所有账号吗？\\n\\n删除后无法恢复！下一步需要完成人机验证并输入您的登录邮箱以确认。')) return;
 
-            // 调用后端发送验证码
-            try {
-                showFloatingMessage('📧 正在发送验证码...', 'info');
-                const r = await fetch('/api/clear-all/send-code', {
-                    method: 'POST',
-                    headers: { 'Authorization': \`Bearer \${authToken}\`, 'Content-Type': 'application/json' }
-                });
-                const d = await r.json();
-                if (!r.ok) {
-                    showFloatingMessage('❌ 发送验证码失败：' + (d.error || r.status), 'error');
-                    return;
-                }
-                showClearAllVerifyModal(d.email || d.maskedEmail);
-            } catch (e) {
-                showFloatingMessage('❌ 网络错误：' + e.message, 'error');
-            }
+            showClearAllVerifyModal();
         }
 
-        function showClearAllVerifyModal(maskedEmail) {
+        function showClearAllVerifyModal() {
+            const siteKey = window.TURNSTILE_SITE_KEY || '';
             const html = \`
-                <div style="text-align:center; padding:1rem 0;">
-                    <div style="font-size:3rem; margin-bottom:0.5rem;">📧</div>
-                    <h3 style="margin-bottom:0.5rem;">邮箱验证</h3>
-                    <p style="color:#6b7280; margin-bottom:1.5rem;">已向 <strong>\${maskedEmail}</strong> 发送 6 位验证码，5 分钟内有效。</p>
+                <div style="padding:1rem 0;">
+                    <div style="text-align:center; margin-bottom:1.5rem;">
+                        <div style="font-size:3rem;">🗑️</div>
+                        <h3 style="margin:0.5rem 0; color:#dc2626;">最终确认</h3>
+                        <p style="color:#6b7280; font-size:0.9rem;">为防止误删，请完成以下两项验证后才能清空所有账号</p>
+                    </div>
                     <form id="clearAllVerifyForm">
                         <div class="form-group">
-                            <input type="text" id="clearVerifyCode" required pattern="[0-9]{6}" maxlength="6"
-                                   placeholder="6 位验证码" autocomplete="one-time-code" inputmode="numeric"
-                                   style="text-align:center; font-size:1.5rem; letter-spacing:0.5rem; padding:0.75rem;">
+                            <label for="clearConfirmEmail" style="font-weight:600;">输入您的登录邮箱：</label>
+                            <input type="email" id="clearConfirmEmail" required
+                                   placeholder="例如：you@example.com"
+                                   autocomplete="email"
+                                   style="padding:0.75rem; font-size:1rem;">
+                            <small style="color:#6b7280;">必须与您当前登录的邮箱完全一致</small>
                         </div>
-                        <div id="clearVerifyError" style="color:#dc2626; margin:0.5rem 0; min-height:1.2rem;"></div>
+
+                        <div class="form-group" style="margin-top:1.25rem;">
+                            <label style="font-weight:600; display:block; margin-bottom:0.5rem;">完成人机验证：</label>
+                            <div id="turnstileWidget" style="min-height:65px;"></div>
+                        </div>
+
+                        <div id="clearVerifyError" style="color:#dc2626; margin:0.75rem 0; min-height:1.2rem;"></div>
+
                         <div style="display:flex; gap:0.75rem; margin-top:1.5rem; justify-content:center;">
-                            <button type="submit" class="btn btn-danger">确认清空所有账号</button>
+                            <button type="submit" class="btn btn-danger" id="clearAllSubmitBtn" disabled
+                                    style="opacity:0.5; cursor:not-allowed;">确认清空所有账号</button>
                             <button type="button" onclick="closeModal()" class="btn btn-secondary">取消</button>
                         </div>
                     </form>
-                    <p style="color:#9ca3af; font-size:0.85rem; margin-top:1rem;">⚠️ 此操作不可撤销</p>
+                    <p style="color:#9ca3af; font-size:0.85rem; margin-top:1rem; text-align:center;">⚠️ 此操作不可撤销</p>
                 </div>
             \`;
             showModal('🗑️ 二次验证 - 清空账号', html);
-            setTimeout(() => document.getElementById('clearVerifyCode')?.focus(), 100);
+
+            // 加载 Turnstile widget
+            let turnstileToken = null;
+            const submitBtn = document.getElementById('clearAllSubmitBtn');
+
+            // 动态加载 Turnstile JS（仅在该 modal 打开时）
+            if (!document.getElementById('cf-turnstile-script')) {
+                const s = document.createElement('script');
+                s.id = 'cf-turnstile-script';
+                s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?onload=__onTurnstileLoad&render=explicit';
+                s.async = true;
+                s.defer = true;
+                document.head.appendChild(s);
+            }
+
+            window.__onTurnstileLoad = window.__onTurnstileLoad || function() {};
+            window.__renderTurnstile = function() {
+                if (window.turnstile && document.getElementById('turnstileWidget')) {
+                    window.turnstile.render('#turnstileWidget', {
+                        sitekey: siteKey,
+                        callback: function(token) {
+                            turnstileToken = token;
+                            submitBtn.disabled = false;
+                            submitBtn.style.opacity = '1';
+                            submitBtn.style.cursor = 'pointer';
+                        },
+                        'error-callback': function() {
+                            document.getElementById('clearVerifyError').textContent = '人机验证失败，请刷新重试';
+                        },
+                        'expired-callback': function() {
+                            turnstileToken = null;
+                            submitBtn.disabled = true;
+                            submitBtn.style.opacity = '0.5';
+                            submitBtn.style.cursor = 'not-allowed';
+                        },
+                        theme: 'light'
+                    });
+                }
+            };
+
+            // 如果 turnstile 已加载，立即渲染；否则等脚本 onload
+            if (window.turnstile) {
+                window.__renderTurnstile();
+            } else {
+                // 覆盖 onload 回调，让 api.js 加载完后调用
+                window.__onTurnstileLoad = window.__renderTurnstile;
+            }
+
+            setTimeout(() => document.getElementById('clearConfirmEmail')?.focus(), 100);
 
             document.getElementById('clearAllVerifyForm').addEventListener('submit', async (e) => {
                 e.preventDefault();
-                const code = document.getElementById('clearVerifyCode').value.trim();
+                const email = document.getElementById('clearConfirmEmail').value.trim();
                 const errEl = document.getElementById('clearVerifyError');
                 errEl.textContent = '';
-                if (!/^\\d{6}$/.test(code)) {
-                    errEl.textContent = '请输入 6 位数字验证码';
+                if (!email) {
+                    errEl.textContent = '请输入您的登录邮箱';
                     return;
                 }
+                if (!turnstileToken) {
+                    errEl.textContent = '请先完成人机验证';
+                    return;
+                }
+                submitBtn.disabled = true;
+                submitBtn.textContent = '正在清空...';
                 try {
                     const resp = await fetch('/api/accounts/clear-all', {
                         method: 'DELETE',
                         headers: { 'Authorization': \`Bearer \${authToken}\`, 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ verify_code: code })
+                        body: JSON.stringify({ turnstile_token: turnstileToken, confirm_email: email })
                     });
                     const data = await resp.json();
                     if (resp.ok) {
@@ -3022,15 +3077,21 @@ header h1 {
                         handleUnauthorized();
                     } else {
                         errEl.textContent = data.error || '清空失败';
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = '确认清空所有账号';
+                        // 重置 Turnstile 让用户重试
+                        if (window.turnstile) window.turnstile.reset();
                     }
                 } catch (err) {
                     errEl.textContent = '网络错误：' + err.message;
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = '确认清空所有账号';
+                    if (window.turnstile) window.turnstile.reset();
                 }
             });
         }
 
         async function clearAllAccounts() {
-            // 旧入口保留兼容，直接转发到新流程
             await startClearAllAccounts();
         }
         
@@ -4870,17 +4931,37 @@ async function handleAccounts(request, env) {
     });
 }
 
+// [Patch v3] 清空账号二次验证：Cloudflare Turnstile + 邮箱确认
+// 用户在 modal 中完成 Turnstile 挑战 + 输入自己注册的邮箱，两者都对才能清空
+async function verifyTurnstile(token, env) {
+    if (!token) return { ok: false, error: '缺少人机验证 token' };
+    const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+            secret: env.TURNSTILE_SECRET_KEY,
+            response: token
+        })
+    });
+    if (!r.ok) return { ok: false, error: `Turnstile 验证服务异常 (${r.status})` };
+    const data = await r.json();
+    if (!data.success) {
+        return { ok: false, error: '人机验证失败：' + (data['error-codes'] || []).join(', ') };
+    }
+    return { ok: true };
+}
+
 async function handleClearAllAccounts(request, env) {
     const corsHeaders = getCorsHeaders(request, env);
     const authenticatedUser = await getAuthenticatedUser(request, env);
-    
+
     if (!authenticatedUser) {
         return new Response(JSON.stringify({ error: 'Unauthorized' }), {
             status: 401,
             headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
     }
-    
+
     if (request.method !== 'DELETE') {
         return new Response(JSON.stringify({ error: 'Method not allowed' }), {
             status: 405,
@@ -4888,56 +4969,48 @@ async function handleClearAllAccounts(request, env) {
         });
     }
 
-    // [Patch v3] 二次验证：从 body 中读取 verify_code，校验 KV 中存储的验证码
-    let verifyCode = null;
+    // [Patch v3] 二次验证：从 body 中读取 turnstile_token + confirm_email
+    let turnstileToken = null;
+    let confirmEmail = null;
     try {
         const body = await request.json();
-        verifyCode = body && body.verify_code;
-    } catch { /* body may be empty — fail closed below */ }
+        turnstileToken = body && body.turnstile_token;
+        confirmEmail = body && body.confirm_email;
+    } catch { /* fail closed below */ }
 
-    if (!verifyCode || typeof verifyCode !== 'string' || !/^\d{6}$/.test(verifyCode)) {
-        await logSecurityEvent('CLEAR_ALL_NO_CODE', { user: authenticatedUser.id }, request);
+    if (!turnstileToken || typeof turnstileToken !== 'string') {
         return new Response(JSON.stringify({
-            error: '缺少有效的 6 位验证码。请先点击按钮获取验证码。'
+            error: '缺少人机验证 token，请完成 Turnstile 验证。'
         }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    // 校验验证码：从 KV 读取，验证码 5 分钟内有效，一次性使用
-    const expectedRaw = await env.USER_DATA.get(`clear_all_code:${authenticatedUser.id}`);
-    if (!expectedRaw) {
+    // 验证 Turnstile token
+    const ts = await verifyTurnstile(turnstileToken, env);
+    if (!ts.ok) {
+        await logSecurityEvent('CLEAR_ALL_TURNSTILE_FAIL',
+            { user: authenticatedUser.id }, request);
+        return new Response(JSON.stringify({ error: ts.error }), {
+            status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+    }
+
+    // 校验用户输入的邮箱与登录邮箱一致
+    if (!confirmEmail || typeof confirmEmail !== 'string') {
         return new Response(JSON.stringify({
-            error: '验证码已过期或未发送，请重新获取。'
+            error: '请输入您的注册邮箱以确认操作。'
         }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
-
-    let expectedData;
-    try { expectedData = JSON.parse(expectedRaw); }
-    catch { expectedData = { code: expectedRaw, attempts: 0 }; }
-
-    // 防爆破：每发一次码最多 5 次尝试
-    expectedData.attempts = (expectedData.attempts || 0) + 1;
-    if (expectedData.attempts > 5) {
-        await env.USER_DATA.delete(`clear_all_code:${authenticatedUser.id}`);
-        await logSecurityEvent('CLEAR_ALL_CODE_BRUTEFORCE', { user: authenticatedUser.id }, request);
+    const expectedEmail = (authenticatedUser.email || '').toLowerCase().trim();
+    const inputEmail = confirmEmail.toLowerCase().trim();
+    if (!expectedEmail || inputEmail !== expectedEmail) {
+        await logSecurityEvent('CLEAR_ALL_EMAIL_MISMATCH',
+            { user: authenticatedUser.id, input: inputEmail }, request);
         return new Response(JSON.stringify({
-            error: '验证码尝试次数过多，请重新获取。'
-        }), { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+            error: '输入的邮箱与您登录的邮箱不一致，操作已拒绝。'
+        }), { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    // 用 constant-time 比较防时序攻击
-    const a = String(verifyCode);
-    const b = String(expectedData.code || '');
-    if (a.length !== b.length || a !== b) {
-        await env.USER_DATA.put(`clear_all_code:${authenticatedUser.id}`,
-            JSON.stringify(expectedData), { expirationTtl: 300 });
-        return new Response(JSON.stringify({
-            error: `验证码错误，剩余尝试次数 ${5 - expectedData.attempts}`
-        }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-    }
-
-    // 验证通过，立即删除验证码（一次性使用）
-    await env.USER_DATA.delete(`clear_all_code:${authenticatedUser.id}`);
-    
+    // 所有验证通过，执行清空
     try {
         const encryptedData = await env.USER_DATA.get('accounts_encrypted');
         let currentCount = 0;
@@ -4982,118 +5055,6 @@ async function handleClearAllAccounts(request, env) {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
     }
-}
-
-// [Patch v3] 发送清空账号的邮箱验证码
-// 使用 MailChannels API（Cloudflare Workers 免费发送邮件）
-// 验证码存入 KV，5 分钟 TTL，绑定用户 ID
-async function handleClearAllSendCode(request, env) {
-    const corsHeaders = getCorsHeaders(request, env);
-    const authenticatedUser = await getAuthenticatedUser(request, env);
-
-    if (!authenticatedUser) {
-        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-            status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-    }
-
-    if (request.method !== 'POST') {
-        return new Response(JSON.stringify({ error: 'Method not allowed' }), {
-            status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-    }
-
-    // 速率限制：同一用户 60 秒内只能发 1 次
-    const lastSentRaw = await env.USER_DATA.get(`clear_all_code_sent:${authenticatedUser.id}`);
-    if (lastSentRaw) {
-        const elapsed = Date.now() - parseInt(lastSentRaw, 10);
-        if (elapsed < 60000) {
-            return new Response(JSON.stringify({
-                error: `请求过于频繁，请等待 ${Math.ceil((60000 - elapsed) / 1000)} 秒后再试`
-            }), { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-        }
-    }
-
-    // 取邮箱（从 CF Access JWT 中获取，登录时已写入 userInfo.email）
-    const email = authenticatedUser.email;
-    if (!email) {
-        return new Response(JSON.stringify({
-            error: '无法获取您的邮箱地址，请重新登录'
-        }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-    }
-
-    // 生成 6 位数字验证码
-    const code = String(Math.floor(100000 + Math.random() * 900000));
-
-    // 存入 KV，5 分钟有效
-    await env.USER_DATA.put(
-        `clear_all_code:${authenticatedUser.id}`,
-        JSON.stringify({ code, attempts: 0, email, created_at: Date.now() }),
-        { expirationTtl: 300 }
-    );
-    await env.USER_DATA.put(
-        `clear_all_code_sent:${authenticatedUser.id}`,
-        String(Date.now()),
-        { expirationTtl: 60 }
-    );
-
-    // 发送邮件（MailChannels API）
-    const appDomain = env.ALLOWED_ORIGINS || 'https://2fa.910500.xyz';
-    const mailResp = await fetch('https://api.mailchannels.net/tx/v1/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            personalizations: [{ to: [{ email, name: authenticatedUser.username || email }] }],
-            from: { email: `noreply@${new URL(appDomain).hostname}`, name: '2FAuth 安全系统' },
-            subject: '🗑️ 清空账号验证码 - 2FAuth',
-            content: [
-                {
-                    type: 'text/plain',
-                    value: `您正在执行"清空所有账号"操作。\n\n验证码：${code}\n\n验证码 5 分钟内有效，仅可使用一次。\n如果您没有发起此操作，请忽略本邮件并检查账号安全。`
-                },
-                {
-                    type: 'text/html',
-                    value: `<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#333;max-width:480px;margin:0 auto;padding:24px;">
-<h2 style="color:#dc2626;">🗑️ 清空账号验证码</h2>
-<p>您正在执行<strong>清空所有 2FA 账号</strong>操作。为防止误删，请使用以下验证码完成确认：</p>
-<div style="margin:24px 0; padding:20px; background:#fef2f2; border:2px dashed #dc2626; border-radius:8px; text-align:center;">
-  <div style="font-size:36px; letter-spacing:8px; font-weight:bold; color:#dc2626; font-family:monospace;">${code}</div>
-</div>
-<p style="color:#6b7280;">⏱ 验证码 5 分钟内有效，仅可使用一次。</p>
-<hr style="border:none; border-top:1px solid #e5e7eb; margin:24px 0;">
-<p style="color:#9ca3af; font-size:12px;">如果您没有发起此操作，请忽略本邮件并检查账号安全。<br>本邮件由系统自动发送，请勿回复。</p>
-</body></html>`
-                }
-            ]
-        })
-    });
-
-    if (!mailResp.ok) {
-        const errText = await mailResp.text();
-        console.error('MailChannels send failed:', mailResp.status, errText);
-        await logSecurityEvent('CLEAR_ALL_CODE_EMAIL_FAIL',
-            { user: authenticatedUser.id, email, status: mailResp.status }, request);
-        // 仍然不暴露具体错误给前端
-        return new Response(JSON.stringify({
-            error: '验证码邮件发送失败，请稍后重试或联系管理员。'
-        }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-    }
-
-    await logSecurityEvent('CLEAR_ALL_CODE_SENT',
-        { user: authenticatedUser.id, email }, request);
-
-    // 返回脱敏的邮箱地址给前端展示
-    const [localPart, domain] = email.split('@');
-    const maskedLocal = localPart.length > 2
-        ? localPart[0] + '*'.repeat(Math.max(1, localPart.length - 2)) + localPart[localPart.length - 1]
-        : localPart[0] + '**';
-    const maskedEmail = `${maskedLocal}@${domain}`;
-
-    return new Response(JSON.stringify({
-        success: true,
-        maskedEmail,
-        message: '验证码已发送'
-    }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 }
 
 async function handleAccountUpdate(request, env, accountId) {
@@ -6171,7 +6132,7 @@ export default {
         
         try {
             if (path === '/' || path === '/index.html') {
-                const html = getMainHTML();
+                const html = getMainHTML(env);
                 return new Response(html, {
                     headers: { 
                         'Content-Type': 'text/html',
@@ -6187,7 +6148,6 @@ export default {
             if (path === '/api/oauth/callback') return await handleOAuthCallback(request, env);
             if (path === '/api/accounts') return await handleAccounts(request, env);
             if (path === '/api/accounts/clear-all') return await handleClearAllAccounts(request, env);
-            if (path === '/api/clear-all/send-code') return await handleClearAllSendCode(request, env);
             if (path.startsWith('/api/accounts/')) {
                 const accountId = path.split('/')[3];
                 return await handleAccountUpdate(request, env, accountId);
