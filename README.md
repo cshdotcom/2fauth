@@ -80,41 +80,49 @@ wrangler kv:namespace create "USER_DATA"
 
 ### 步骤 5：创建 `wrangler.toml`
 
-在仓库根目录创建 `wrangler.toml`，内容如下（替换里面的占位符）：
-
-```toml
-name = "2fauth"
-main = "_worker.js"
-compatibility_date = "2024-09-23"
-compatibility_flags = ["nodejs_compat"]
-
-[[kv_namespaces]]
-binding = "USER_DATA"
-id = "your-kv-namespace-id-from-step-4"
-
-[vars]
-OAUTH_ID = "2fauth-user"
-ALLOWED_EMAILS = "you@example.com,another@example.com"
-ALLOWED_ORIGINS = "https://2fa.yourdomain.com"
-```
-
-> 模式 B（LinuxDO OAuth）需要额外变量，见下文「模式 B 配置」一节。
-
-### 步骤 6：设置密钥环境变量
+仓库提供了 `wrangler.toml.example` 模板。复制为 `wrangler.toml` 并替换占位符：
 
 ```bash
-# 主 JWT 密钥（用于签发会话）
+cp wrangler.toml.example wrangler.toml
+```
+
+编辑 `wrangler.toml`，替换以下占位符：
+- `REPLACE_WITH_YOUR_KV_NAMESPACE_ID` → 步骤 4 创建的 KV ID
+- `you@example.com,another@example.com` → 你的邮箱白名单（逗号分隔）
+- `https://2fa.yourdomain.com` → 你的实际域名
+- `REPLACE_WITH_YOUR_TURNSTILE_SITE_KEY` → 步骤 6 创建的 Turnstile site key
+
+### 步骤 6：创建 Cloudflare Turnstile widget
+
+清空账号操作需要二次验证（防误删），使用 CF 自家的 Turnstile（免费、无感验证）。
+
+1. 打开 Cloudflare Dashboard → Turnstile → **Add widget**
+2. 填写：
+   - **Widget name**: `2fauth-clear-all`
+   - **Domain**: `2fa.yourdomain.com`（你的应用域名）
+   - **Mode**: `Managed`（推荐，正常用户无感通过）
+3. 创建后会得到两个值：
+   - **Site Key**：填到 `wrangler.toml` 的 `TURNSTILE_SITE_KEY`
+   - **Secret Key**：用 `wrangler secret put` 设置（下一步）
+
+### 步骤 7：设置密钥环境变量
+
+```bash
+# 主 JWT 密钥（用于签发 2fauth 会话）
 wrangler secret put JWT_SECRET
 # 粘贴一个 64 字符的随机 hex，例如：openssl rand -hex 32
 
 # 数据加密密钥（用于 AES-GCM 加密 2FA 数据）
 wrangler secret put ENCRYPTION_KEY
 # 同样：openssl rand -hex 32
+
+# Turnstile 服务端密钥（步骤 6 创建 widget 时显示的 Secret Key）
+wrangler secret put TURNSTILE_SECRET_KEY
 ```
 
-⚠️ **务必妥善保管这两个密钥**。一旦丢失 `ENCRYPTION_KEY`，已加密的 2FA 数据将无法恢复。
+⚠️ **务必妥善保管 `ENCRYPTION_KEY`**。一旦丢失，已加密的 2FA 数据将无法恢复。
 
-### 步骤 7：部署 Worker
+### 步骤 8：部署 Worker
 
 ```bash
 wrangler deploy
@@ -126,7 +134,7 @@ Published 2fauth (1.23 sec)
   https://2fauth.<your-subdomain>.workers.dev
 ```
 
-### 步骤 8：绑定自定义域名
+### 步骤 9：绑定自定义域名
 
 1. 打开 Cloudflare Dashboard → 你的域名 → Workers Routes → Add route
 2. 或者：Workers & Pages → `2fauth` → Triggers → Custom Domains → Add Custom Domain
@@ -159,7 +167,7 @@ Published 2fauth (1.23 sec)
 2. 选择 **Self-hosted**
 3. 填写：
    - **Application name**: `2FAuth App`
-   - **Session Duration**: `8 hours`（或你喜欢的时长）
+   - **Session Duration**: `15 minutes`（推荐，见步骤 A4 详解）
    - **Application domain**: `2fa.yourdomain.com`（不要加路径，保护整个域名）
 4. 点击 Next 进入 Policy 配置
 
@@ -174,13 +182,24 @@ Published 2fauth (1.23 sec)
 4. 点 **Add include** 重复添加其他邮箱（每个邮箱一条规则）
 5. 保存 Policy，再保存 Application
 
-### 步骤 A4：验证 Access 生效
+### 步骤 A4：将会话超时设为 15 分钟（推荐，增加安全性）
+
+默认 CF Access 会话 24 小时，建议改为 15 分钟，到期后自动要求重新做 OTP 验证。
+
+1. 在 Application 详情页 → **Settings**（或 General settings）
+2. 找到 **Session Duration**，改为 `15 minutes`
+3. 保存
+
+> 2fauth Worker 内部的 JWT 也会同步 15 分钟过期。两个时间一致避免会话状态混乱。
+> 如果你希望长时间不用重新登录，可以改为 `8 hours` 或更长，但会降低安全性。
+
+### 步骤 A5：验证 Access 生效
 
 打开浏览器访问 `https://2fa.yourdomain.com/`，应该被 302 跳转到 `https://<team>.cloudflareaccess.com/cdn-cgi/access/login/...` 页面。
 
 输入白名单中的邮箱 → 收到 OTP → 输入 → 跳回 2FAuth 登录页。
 
-### 步骤 A5：完成登录
+### 步骤 A6：完成登录
 
 1. 在 2FAuth 登录页点击「第三方授权登录」按钮
 2. Worker 读取请求头 `Cf-Access-Jwt-Assertion`，解码出 email
@@ -271,11 +290,14 @@ wrangler deploy
 | 变量名 | 类型 | 必需 | 示例 / 说明 |
 | --- | --- | --- | --- |
 | `USER_DATA` | KV binding | ✅ | 绑定到步骤 4 创建的 KV 命名空间 |
-| `JWT_SECRET` | secret | ✅ | `openssl rand -hex 32` |
-| `ENCRYPTION_KEY` | secret | ✅ | `openssl rand -hex 32` |
+| `JWT_SECRET` | secret | ✅ | `openssl rand -hex 32`（签发 2fauth 会话 JWT，15 分钟过期） |
+| `ENCRYPTION_KEY` | secret | ✅ | `openssl rand -hex 32`（AES-GCM 加密 2FA 数据，务必备份） |
+| `TURNSTILE_SITE_KEY` | var | ✅ | Turnstile widget site key（公开值，可放 toml） |
+| `TURNSTILE_SECRET_KEY` | secret | ✅ | Turnstile widget secret key（服务端校验用） |
 | `OAUTH_ID` | var | ✅ | `2fauth-user`（统一用户 ID，所有邮箱共享数据） |
-| `ALLOWED_EMAILS` | var | ✅ | 逗号分隔的邮箱白名单 |
+| `ALLOWED_EMAILS` | var | ✅ | 逗号分隔的邮箱白名单（与 Access Policy 一致） |
 | `ALLOWED_ORIGINS` | var | ✅ | `https://2fa.yourdomain.com` |
+| `OAUTH_REDIRECT_URI` | var | ✅ | `https://2fa.yourdomain.com/api/oauth/callback`（占位，CF Access 模式不实际使用） |
 
 ### 模式 B（LinuxDO OAuth）需要的变量
 
